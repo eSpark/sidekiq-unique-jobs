@@ -1,0 +1,28 @@
+sudo: false
+language: ruby
+services:
+  - redis-server
+rvm:
+  - jruby-19mode
+  - jruby-9.0.0.0
+  - rbx2
+  - 2.0.0
+  - 2.1.2
+  - 2.2.2
+gemfile:
+  - gemfiles/sidekiq_develop.gemfile
+  - gemfiles/sidekiq_2.17.gemfile
+  - gemfiles/sidekiq_3.0.gemfile
+  - gemfiles/sidekiq_3.1.gemfile
+  - gemfiles/sidekiq_3.2.gemfile
+  - gemfiles/sidekiq_3.3.gemfile
+# branches:
+#   only:
+#     - master
+notifications:
+  email:
+    recipients:
+      - mikael@zoolutions.se
+matrix:
+  allow_failures:
+    - rvm: rbx2

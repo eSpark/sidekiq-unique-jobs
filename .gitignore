@@ -1,0 +1,12 @@
+
+*.gem
+
+.DS_Store
+
+Gemfile.lock
+
+.ruby-version
+.idea/
+gemfiles/*.lock
+*.sw?
+coverage/
