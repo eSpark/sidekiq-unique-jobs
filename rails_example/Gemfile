@@ -1,0 +1,34 @@
+source 'https://rubygems.org'
+
+ruby '2.3.1'
+
+gem 'rails', '~> 5.0'
+gem 'puma'
+gem 'json'
+gem 'bigdecimal'
+
+platforms :ruby do
+  gem 'pg'
+  gem 'pry-byebug'
+  gem 'ruby-prof'
+end
+
+platforms :jruby do
+  gem 'jruby-openssl'
+  gem 'jdbc-pg'
+  gem 'activerecord-jdbc-adapter'
+end
+
+gem 'sidekiq-unique-jobs', path: '../'
+gem 'sinatra', github: 'sinatra/sinatra'
+
+group :development do
+  gem 'web-console'
+end
+
+group :development, :test do
+  gem 'rspec-rails'
+  gem 'factory_girl_rails'
+  gem 'mock_redis'
+end
+
