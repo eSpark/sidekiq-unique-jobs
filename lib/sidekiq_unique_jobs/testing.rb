@@ -1,11 +1,45 @@
 require 'sidekiq_unique_jobs/testing/sidekiq_overrides'
+require 'sidekiq_unique_jobs/script_mock'
 
 module SidekiqUniqueJobs
+  alias redis_version_real redis_version
+  def redis_version
+    if mocked?
+      '0.0'
+    else
+      redis_version_real
+    end
+  end
+
+  module Scripts
+    module Overrides
+      def self.included(base)
+        base.extend Testing
+        base.class_eval do
+          class << self
+            alias_method :call_orig, :call
+            alias_method :call, :call_ext
+          end
+        end
+      end
+
+      module Testing
+        def call_ext(file_name, redis_pool, options = {})
+          if SidekiqUniqueJobs.config.redis_test_mode == :mock
+            SidekiqUniqueJobs::ScriptMock.call(file_name, redis_pool, options)
+          else
+            call_orig(file_name, redis_pool, options)
+          end
+        end
+      end
+    end
+
+    include Overrides
+  end
+
   module Client
     class Middleware
-      alias_method :call_real, :call
-      alias_method :unique_for_connection_real?, :unique_for_connection?
-
+      alias call_real call
       def call(worker_class, item, queue, redis_pool = nil)
         worker_class = SidekiqUniqueJobs.worker_class_constantize(worker_class)
 
@@ -24,32 +58,6 @@ module SidekiqUniqueJobs
 
       def _server
         SidekiqUniqueJobs::Server::Middleware.new
-      end
-
-      def unique_for_connection?
-        return unique_for_connection_real? unless Sidekiq::Testing.fake?
-        return true if worker_class.jobs.empty?
-
-        worker_class.jobs.find do |job|
-          item['unique_hash'] == job['unique_hash']
-        end.nil?
-      end
-    end
-  end
-
-  module Server
-    class Middleware
-      alias_method :unlock_real, :unlock
-
-      def unlock(lock_key, item)
-        return unlock_real(lock_key, item) unless SidekiqUniqueJobs.config.mocking?
-
-        connection do |con|
-          con.watch(lock_key)
-          return con.unwatch unless con.get(lock_key) == item['jid']
-
-          con.multi { con.del(lock_key) }
-        end
       end
     end
   end

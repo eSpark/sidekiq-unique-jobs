@@ -1,21 +1,28 @@
 RSpec.configure do |config|
-  VERSION_REGEX = /(?<operator>[<>=]+)?\s?(?<version>(\d+.?)+)/m.freeze
+  VERSION_REGEX = /(?<operator>[<>=]+)?\s?(?<version>(\d+.?)+)/m
   config.before(:each) do |example|
-    Sidekiq::Worker.clear_all
+    SidekiqUniqueJobs.configure do |config|
+      config.redis_test_mode = :redis
+    end
+
     if (sidekiq = example.metadata[:sidekiq])
       sidekiq = :fake if sidekiq == true
       Sidekiq::Testing.send("#{sidekiq}!")
     end
 
-    sidekiq_ver = example.metadata[:sidekiq_ver]
-    version, operator = VERSION_REGEX.match(sidekiq_ver.to_s) do |m|
-      fail 'Please specify how to compare the version with >= or < or =' unless m[:operator]
-      [m[:version], m[:operator]]
-    end
+    if (sidekiq_ver = example.metadata[:sidekiq_ver])
+      VERSION_REGEX.match(sidekiq_ver.to_s) do |match|
+        version  = match[:version]
+        operator = match[:operator]
 
-    unless Sidekiq::VERSION.send(operator, version)
-      skip("Not relevant for version #{version}")
-    end if version && operator
+        raise 'Please specify how to compare the version with >= or < or =' unless operator
+
+        unless Sidekiq::VERSION.send(operator, version)
+          skip('Skipped due to version check (requirement was that sidekiq version is ' \
+               "#{operator} #{version}; was #{Sidekiq::VERSION})")
+        end
+      end
+    end
   end
 
   config.after(:each) do |example|

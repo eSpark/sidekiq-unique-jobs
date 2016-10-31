@@ -1,6 +1,17 @@
 require 'yaml' if RUBY_VERSION.include?('2.0.0') # rubocop:disable FileName
-require 'sidekiq_unique_jobs/middleware'
+require 'forwardable'
 require 'sidekiq_unique_jobs/version'
+require 'sidekiq_unique_jobs/constants'
+require 'sidekiq_unique_jobs/util'
+require 'sidekiq_unique_jobs/cli'
+require 'sidekiq_unique_jobs/core_ext'
+require 'sidekiq_unique_jobs/timeout_calculator'
+require 'sidekiq_unique_jobs/options_with_fallback'
+require 'sidekiq_unique_jobs/scripts'
+require 'sidekiq_unique_jobs/unique_args'
+require 'sidekiq_unique_jobs/unlockable'
+require 'sidekiq_unique_jobs/lock'
+require 'sidekiq_unique_jobs/middleware'
 require 'sidekiq_unique_jobs/config'
 require 'sidekiq_unique_jobs/sidekiq_unique_ext'
 
@@ -11,21 +22,30 @@ module SidekiqUniqueJobs
 
   def config
     @config ||= Config.new(
-      unique_prefix: 'sidekiq_unique',
-      unique_args_enabled: false,
-      default_expiration: 30 * 60,
-      default_unlock_order: :after_yield,
-      unique_storage_method: :new,
+      unique_prefix: 'uniquejobs',
+      default_queue_lock_expiration: 30 * 60,
+      default_run_lock_expiration: 60,
+      default_lock: :while_executing,
       redis_test_mode: :redis # :mock
     )
   end
 
-  def unique_args_enabled?
-    config.unique_args_enabled
+  def default_lock
+    config.default_lock
   end
 
-  def configure
-    yield config
+  def configure(options = {})
+    if block_given?
+      yield config
+    else
+      options.each do |key, val|
+        config.send("#{key}=", val)
+      end
+    end
+  end
+
+  def namespace
+    @namespace ||= connection { |c| c.respond_to?(:namespace) ? c.namespace : nil }
   end
 
   # Attempt to constantize a string worker_class argument, always
@@ -37,55 +57,23 @@ module SidekiqUniqueJobs
     worker_class
   end
 
-  def get_payload(klass, queue, *args)
-    unique_on_all_queues = false
-    if config.unique_args_enabled
-      worker_class = worker_class_constantize(klass)
-      args = yield_unique_args(worker_class, *args)
-      unique_on_all_queues =
-        worker_class.get_sidekiq_options['unique_on_all_queues']
-    end
-    md5_arguments = { class: klass, args: args }
-    md5_arguments[:queue] = queue unless unique_on_all_queues
-    "#{config.unique_prefix}:" \
-      "#{Digest::MD5.hexdigest(Sidekiq.dump_json(md5_arguments))}"
+  def mocked?
+    config.redis_test_mode == :mock
   end
 
-  def payload_hash(item)
-    get_payload(item['class'], item['queue'], item['args'])
+  def redis_version
+    @redis_version ||= connection { |c| c.info('server'.freeze)['redis_version'.freeze] }
   end
 
-  def yield_unique_args(worker_class, args)
-    unique_args = worker_class.get_sidekiq_options['unique_args']
-    filtered_args(worker_class, unique_args, args)
-  rescue NameError
-    # fallback to not filtering args when class can't be instantiated
-    args
-  end
-
-  def connection(redis_pool = nil, &block)
-    return mock_redis if SidekiqUniqueJobs.config.mocking?
-    redis_pool ? redis_pool.with(&block) : Sidekiq.redis(&block)
-  end
-
-  def self.mock_redis
-    @redis_mock ||= MockRedis.new
-  end
-
-  def filtered_args(worker_class, unique_args, args)
-    case unique_args
-    when Proc
-      unique_args.call(args)
-    when Symbol
-      if worker_class.respond_to?(unique_args)
-        worker_class.send(unique_args, *args)
-      end
+  def connection(redis_pool = nil)
+    if redis_pool
+      redis_pool.with { |conn| yield conn }
     else
-      args
+      Sidekiq.redis { |conn| yield conn }
     end
   end
 
-  def synchronize(key, redis, item = nil, &blk)
-    SidekiqUniqueJobs::RunLock.synchronize(key, redis, item, &blk)
+  def synchronize(item, redis_pool)
+    Lock::WhileExecuting.synchronize(item, redis_pool) { yield }
   end
 end
